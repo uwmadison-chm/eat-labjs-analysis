@@ -42,7 +42,6 @@ class Unpacker():
 
             # The data is a JSON-encoded array in the last column
             data = json.loads(row[5])
-            #logging.debug(f"Data for {row[0:-2]}")
             for thing in data:
                 if thing['sender'] == 'Instructions Start':
                     if 'ppt' in thing:
@@ -120,7 +119,7 @@ class Comparer():
                 rating_sampled = self.sample_frame(rating, last_time)
 
                 pearsonCorrelation = original_sampled.corrwith(rating_sampled, axis=0)
-                print(f'ppt {ppt} trial {trial} Pearson correlation {float(pearsonCorrelation)}')
+                print(f'ppt {ppt} trial {trial} (video {name}) Pearson correlation {float(pearsonCorrelation)}')
 
                 ax = plt.gca()
 
@@ -157,8 +156,8 @@ if __name__ == '__main__':
         u = Unpacker(args.db)
         data = u.unpack()
 
-        # TODO: real analysis logic
-        comp = Comparer(data[0])
+        for ppt in data.keys():
+            comp = Comparer(data[ppt])
 
     else:
         logging.error("DB path does not exist")
