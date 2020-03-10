@@ -70,7 +70,7 @@ class Unpacker():
                             'trial_count': trial_count,
                             'response': thing['response'],
                             'ppt': thing['ppt'],
-                            'timestamp': thing['timestamp'],
+                            'timestamp': timestamp,
                         }
                     if 'video_filename' in thing:
                         to_save['video_filename'] = thing['video_filename']
