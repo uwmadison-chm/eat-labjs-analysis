@@ -13,6 +13,7 @@ import pandas as pd
 import numpy as np
 import math
 import matplotlib.pyplot as plt
+import csv
 
 
 def ms(seconds):
@@ -71,63 +72,70 @@ class Unpacker():
         
 
 class Comparer():
-    def __init__(self, data):
+    def __init__(self, ppt, data, output_dir):
         self.data = data
-        for vid in data:
-            trial = vid['trial_count']
-            ppt = vid["ppt"]
+        if not data:
+            return
 
-            # Get the original actor's ratings
-            f = vid['video_filename']
-            m = re.search('(EA\d+-[NP]\d+)', f)
-            name = m.group(0)
-            csv_name = os.path.join('original-ratings', f'{name}.csv')
-            original = pd.read_csv(csv_name, header=None)
-            original.columns = ['rating', 'time']
-            # normalize ratings from likert 1-9 to 0-1
-            original['rating'] = (original['rating'] - 1) / 8
+        tsv_path = os.path.join(output_dir, f'ppt{ppt}stats.tsv'))
+        with open(tsv_path, 'w') as tsvfile:
+            tsvwriter = csv.writer(csvfile, delimiter='\t')
+            tsvwriter.writerow(['ppt', 'trial', 'video_name', 'original_rater_pearson_coefficient'])
 
-            # Get this trial's ratings
-            rating = pd.DataFrame(vid['response'])
-    
-            # Plot n' compare them!
-            if len(rating.index) > 0:
-                rating.columns = ['time', 'player_time', 'rating']
-                # Not using the player callback time, browser time should be closer to accurate
-                rating = rating.drop(columns=['player_time'])
-                rating['time'] = rating['time'] / 1000
+            for vid in data:
+                trial = vid['trial_count']
 
-                # Add a beginning rating that starts at the midpoint
-                # (oops, I should have had the task do this)
-                rating.loc[-1] = [0.0, 0.5]
-                rating.index = rating.index + 1 # shifting index forward
-                rating.sort_index(inplace=True) 
+                # Get the original actor's ratings
+                f = vid['video_filename']
+                m = re.search('(EA\d+-[NP]\d+)', f)
+                name = m.group(0)
+                csv_name = os.path.join(os.path.realpath(__file__), 'original-ratings', f'{name}.csv')
+                original = pd.read_csv(csv_name, header=None)
+                original.columns = ['rating', 'time']
+                # normalize ratings from likert 1-9 to 0-1
+                original['rating'] = (original['rating'] - 1) / 8
 
-                # Add an end rating that just drags out what they started with
-                # if they didn't move the mouse for a while
-                last_rating_time = rating['time'].iloc[-1]
-                last_original_time = original['time'].iloc[-1]
-                last_time = last_rating_time
+                # Get this trial's ratings
+                rating = pd.DataFrame(vid['response'])
+        
+                # Plot n' compare them!
+                if len(rating.index) > 0:
+                    rating.columns = ['time', 'player_time', 'rating']
+                    # Not using the player callback time, browser time should be closer to accurate
+                    rating = rating.drop(columns=['player_time'])
+                    rating['time'] = rating['time'] / 1000
 
-                if last_original_time > last_rating_time:
-                    last_time = last_original_time
-                    new_row = {'time':last_time, 'rating':rating['rating'].iloc[-1]}
-                    rating = rating.append(new_row, ignore_index=True)
+                    # Add a beginning rating that starts at the midpoint
+                    # (oops, I should have had the task do this)
+                    rating.loc[-1] = [0.0, 0.5]
+                    rating.index = rating.index + 1 # shifting index forward
+                    rating.sort_index(inplace=True) 
 
-                # BUT FIRST, let's make sampled dataframes that have data for every millisecond
-                original_sampled = self.sample_frame(original, last_time)
-                rating_sampled = self.sample_frame(rating, last_time)
+                    # Add an end rating that just drags out what they started with
+                    # if they didn't move the mouse for a while
+                    last_rating_time = rating['time'].iloc[-1]
+                    last_original_time = original['time'].iloc[-1]
+                    last_time = last_rating_time
 
-                pearsonCorrelation = original_sampled.corrwith(rating_sampled, axis=0)
-                print(f'ppt {ppt} trial {trial} (video {name}) Pearson correlation {float(pearsonCorrelation)}')
+                    if last_original_time > last_rating_time:
+                        last_time = last_original_time
+                        new_row = {'time':last_time, 'rating':rating['rating'].iloc[-1]}
+                        rating = rating.append(new_row, ignore_index=True)
 
-                ax = plt.gca()
+                    # BUT FIRST, let's make sampled dataframes that have data for every millisecond
+                    original_sampled = self.sample_frame(original, last_time)
+                    rating_sampled = self.sample_frame(rating, last_time)
 
-                original_sampled.plot(kind='line',use_index=True,y='rating',ax=ax,label='Original Actor')
-                rating_sampled.plot(kind='line',use_index=True,y='rating',color='red',ax=ax,label=f'Participant {ppt}')
+                    pearsonCorrelation = original_sampled.corrwith(rating_sampled, axis=0)
+                    tsvwriter.writerow([ppt, trial, name, float(pearsonCorrelation)])
 
-                ax.get_figure().savefig(f'ppt{ppt}figure{trial}.png')
-                plt.clf()
+                    ax = plt.gca()
+
+                    original_sampled.plot(kind='line',use_index=True,y='rating',ax=ax,label='Original Actor')
+                    rating_sampled.plot(kind='line',use_index=True,y='rating',color='red',ax=ax,label=f'Participant {ppt}')
+
+                    ax.get_figure().savefig(os.path.join(output_dir, f'ppt{ppt}figure{trial}.png'))
+                    plt.clf()
 
     def sample_frame(self, df, time):
         time = range(ms(time)+1)
@@ -142,6 +150,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Extract usable data from lab.js sqlite database for Empathic Accuracy task')
     parser.add_argument('-v', '--verbose', action='count')
     parser.add_argument('db')
+    parser.add_argument('output')
     args = parser.parse_args()
 
     if args.verbose:
@@ -157,7 +166,7 @@ if __name__ == '__main__':
         data = u.unpack()
 
         for ppt in data.keys():
-            comp = Comparer(data[ppt])
+            comp = Comparer(ppt, data[ppt], args.output)
 
     else:
         logging.error("DB path does not exist")
