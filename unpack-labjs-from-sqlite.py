@@ -91,8 +91,10 @@ class Comparer():
             # normalize ratings from likert 1-9 to 0-1
             original['rating'] = (original['rating'] - 1) / 8
 
-            # Get this trial's ratings
+            # Get this trial's ratings, storing the raw mouse movements
             rating = pd.DataFrame(vid['response'])
+            rating_file = os.path.join(output_dir, f"raw_{ppt}_{trial}.tsv")
+            rating.to_csv(rating_file, sep='\t')
     
             # Plot n' compare them!
             if len(rating.index) > 0:
@@ -130,7 +132,7 @@ class Comparer():
                 original_sampled.plot(kind='line',use_index=True,y='rating',ax=ax,label='Original Actor')
                 rating_sampled.plot(kind='line',use_index=True,y='rating',color='red',ax=ax,label=f'Participant {ppt}')
 
-                ax.get_figure().savefig(os.path.join(output_dir, f'eat_{ppt}_figure{trial}.png'))
+                ax.get_figure().savefig(os.path.join(output_dir, f'plot_{ppt}_figure{trial}.png'))
                 plt.clf()
 
     def sample_frame(self, df, time):

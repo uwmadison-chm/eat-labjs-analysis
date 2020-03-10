@@ -8,7 +8,7 @@ Will probably do more stats stuff in the future.
 
 ## Setup
 
-Edit sync.sh and change variables.
+Copy sync-example.sh to sync.sh and change variables.
 
 Run sync.sh as studyname-upload in crontab on webtasks.
 
