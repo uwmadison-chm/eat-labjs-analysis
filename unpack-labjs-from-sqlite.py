@@ -6,6 +6,8 @@ import itertools
 
 # unpacker
 import sqlite3
+import dateutil.parser
+import pytz
 
 # comparer
 import re
@@ -18,6 +20,9 @@ import csv
 
 def ms(seconds):
     return math.floor(seconds * 1000)
+
+
+CST = pytz.timezone('US/Central')
 
 
 class Unpacker():
@@ -56,13 +61,16 @@ class Unpacker():
                     ppt = thing['ppt']
                     if not ppt in sessions:
                         sessions[ppt] = []
-                    logging.debug(f"Got video {trial_count} with {len(thing['response'])} mouse movements for {ppt}")
+
+                    timestamp = dateutil.parser.parse(thing['timestamp']).astimezone(CST)
+                    logging.debug(f"Got video {trial_count} with {len(thing['response'])} mouse movements for {ppt} at {timestamp}")
 
                     to_save = {
                             'affect': thing['affect'],
                             'trial_count': trial_count,
                             'response': thing['response'],
                             'ppt': thing['ppt'],
+                            'timestamp': thing['timestamp'],
                         }
                     if 'video_filename' in thing:
                         to_save['video_filename'] = thing['video_filename']
@@ -79,6 +87,8 @@ class Comparer():
 
         for vid in data:
             trial = vid['trial_count']
+            affect = vid['affect']
+            timestamp = vid['timestamp']
 
             # Get the original actor's ratings
             f = vid['video_filename']
@@ -125,7 +135,7 @@ class Comparer():
                 rating_sampled = self.sample_frame(rating, last_time)
 
                 pearsonCorrelation = original_sampled.corrwith(rating_sampled, axis=0)
-                tsvwriter.writerow([ppt, trial, name, float(pearsonCorrelation)])
+                tsvwriter.writerow([ppt, trial, affect, timestamp, name, float(pearsonCorrelation)])
 
                 ax = plt.gca()
 
@@ -166,7 +176,7 @@ if __name__ == '__main__':
         tsv_path = os.path.join(args.output, f'eat_summary.tsv')
         with open(tsv_path, 'w') as tsvfile:
             tsvwriter = csv.writer(tsvfile, delimiter='\t')
-            tsvwriter.writerow(['ppt', 'trial', 'video_name', 'original_rater_pearson_coefficient'])
+            tsvwriter.writerow(['ppt', 'trial', 'affect', 'timestamp', 'video_name', 'original_rater_pearson_coefficient'])
             for ppt in data.keys():
                 comp = Comparer(tsvwriter, ppt, data[ppt], args.output)
 
