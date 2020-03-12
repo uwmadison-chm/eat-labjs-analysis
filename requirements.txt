@@ -1,1 +1,6 @@
 coloredlogs
+python-dateutil
+pytz
+pandas
+numpy
+matplotlib

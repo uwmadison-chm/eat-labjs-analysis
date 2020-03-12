@@ -5,7 +5,7 @@ DESTINATION="/study/EXAMPLE/raw_data/eat"
 STUDY="EXAMPLE"
 
 source /home/bashrc
-set_study $STUDY
+set_study $STUDY > /dev/null
 
 cp $SOURCE $DESTINATION
 chmod 700 $DESTINATION/data.sqlite
