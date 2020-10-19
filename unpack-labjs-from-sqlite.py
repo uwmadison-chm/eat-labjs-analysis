@@ -104,7 +104,7 @@ class Comparer():
             # Get this trial's ratings, storing the raw mouse movements
             rating = pd.DataFrame(vid['response'])
             rating_file = os.path.join(output_dir, f"raw_{ppt}_{trial}.tsv")
-            rating.to_csv(rating_file, sep='\t')
+            rating.to_csv(rating_file, sep='\t', index=False)
     
             # Plot n' compare them!
             if len(rating.index) > 0:
