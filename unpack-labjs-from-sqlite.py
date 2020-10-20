@@ -25,6 +25,58 @@ def ms(seconds):
 CST = pytz.timezone('US/Central')
 
 
+def sample_frame(df, time):
+    time = range(ms(time)+1)
+    nf = pd.DataFrame(columns=['rating'], index=time)
+    for index, row in df.iterrows():
+        timeindex = ms(row['time'])
+        nf.iloc[timeindex,0] = row['rating']
+    nf = nf.fillna(method='ffill')
+    nf = nf.fillna(0.5)
+    return nf
+
+
+def load_original(f):
+    # Load the original actor's ratings given a video filename
+    m = re.search('(EA\d+-[NP]\d+)', f)
+    name = m.group(0)
+    this_dir = os.path.dirname(os.path.realpath(__file__))
+    csv_name = os.path.join(this_dir, 'original-ratings', f'{name}.csv')
+    original = pd.read_csv(csv_name, header=None)
+    original.columns = ['rating', 'time']
+    # normalize ratings from likert 1-9 to 0-1
+    original['rating'] = (original['rating'] - 1) / 8
+    return original, name
+
+
+def fix_ratings(rating, last_original_time):
+    rating.rename(columns={"value":"rating", "browserTime":"time"}, inplace=True)
+    # print(f"Last rating time is {rating['time'].iloc[-1]}")
+    # print(f"Last player time is {rating['player_time'].iloc[-1]}")
+    # Browser time is more reliable than the player callback
+    rating = rating.drop(columns=['playerTime'])
+    # Browser time is in ms
+    rating['time'] = rating['time'] / 1000
+
+    # Add a beginning rating that starts at the midpoint
+    # (oops, I should have had the task do this)
+    rating.loc[-1] = [0.0, 0.5]
+    rating.index = rating.index + 1 # shifting index forward
+    rating.sort_index(inplace=True) 
+
+    # Add an end rating that just drags out what they started with
+    # if they didn't move the mouse for a while
+    last_rating_time = rating['time'].iloc[-1]
+    last_time = last_rating_time
+
+    if last_original_time > last_rating_time:
+        last_time = last_original_time
+        new_row = {'time':last_time, 'rating':rating['rating'].iloc[-1]}
+        rating = rating.append(new_row, ignore_index=True)
+
+    return rating, last_time
+
+
 class Unpacker():
     def __init__(self, path):
         self.conn = sqlite3.connect(path)
@@ -79,80 +131,104 @@ class Unpacker():
         return sessions
         
 
+class Aggregator():
+    def __init__(self, data):
+        # Here we just want to get aggregated "mean" ratings for the comparer to use later
+
+        self.vids = {}
+        self.ppts = {}
+        self.short_name = {}
+        self.original_videos = {}
+        self.original_video_length = {}
+
+        # Cache original file lengths
+        def get_original_length(name):
+            if name in self.original_video_length:
+                return self.original_video_length[name]
+            else:
+                original, short_name = load_original(vid['video_filename'])
+
+                time = original['time'].iloc[-1]
+                self.original_video_length[name] = time
+                original_sampled = sample_frame(original, time)
+                self.original_videos[name] = original_sampled
+                self.short_name[name] = short_name
+                return time
+
+        for ppt in data.keys():
+            for vid in data[ppt]:
+                filename = vid['video_filename']
+
+                rating = pd.DataFrame(vid['response'])
+                if len(rating.index) > 0:
+                    rating, last_time = fix_ratings(rating, get_original_length(filename))
+                    # Resample to second bins
+                    try:
+                        rating_sampled = sample_frame(rating, last_time)
+                    except Exception as e:
+                        print(f"Spooky resampling error trapped in ppt {ppt} vid {filename}, skipping for now")
+                        pass
+                        # from IPython import embed; embed() 
+                    if not filename in self.vids:
+                        self.vids[filename] = []
+                    if not ppt in self.ppts:
+                        self.ppts[ppt] = []
+                    self.vids[filename].append(rating_sampled)
+                    self.ppts[ppt].append({
+                        'filename': filename,
+                        'rating': rating,
+                        'rating_sampled': rating_sampled,
+                        'trial_count': vid['trial_count'],
+                        'affect': vid['affect'],
+                        'timestamp': vid['timestamp'],
+                    })
+
+        self.means = {}
+        # OK, now we have a hash by video file and can average them together...
+        for vid in self.vids.keys():
+            ratings_for_video = self.vids[vid]
+            all_ratings = pd.concat(ratings_for_video, axis=1)
+            means = all_ratings.mean(axis=1)
+            df_means = pd.DataFrame(means)
+            df_means.columns = ['rating']
+            self.means[vid] = df_means
+
+
 class Comparer():
-    def __init__(self, tsvwriter, ppt, data, output_dir):
-        self.data = data
-        if not data:
-            return
+    def __init__(self, ppt, agg, tsvwriter, output_dir):
 
-        for vid in data:
-            trial = vid['trial_count']
-            affect = vid['affect']
-            timestamp = vid['timestamp']
+        for trial in agg.ppts[ppt]:
+            trial_count = trial['trial_count']
+            affect = trial['affect']
+            timestamp = trial['timestamp']
+            name = trial['filename']
 
-            # Get the original actor's ratings
-            f = vid['video_filename']
-            m = re.search('(EA\d+-[NP]\d+)', f)
-            name = m.group(0)
-            this_dir = os.path.dirname(os.path.realpath(__file__))
-            csv_name = os.path.join(this_dir, 'original-ratings', f'{name}.csv')
-            original = pd.read_csv(csv_name, header=None)
-            original.columns = ['rating', 'time']
-            # normalize ratings from likert 1-9 to 0-1
-            original['rating'] = (original['rating'] - 1) / 8
+            # Get original actor's ratings, previously loaded and resampled by aggregator
+            original_sampled = agg.original_videos[name]
+            short_name = agg.original_videos[name]
 
-            # Get this trial's ratings, storing the raw mouse movements
-            rating = pd.DataFrame(vid['response'])
-            rating_file = os.path.join(output_dir, f"raw_{ppt}_{trial}.tsv")
-            rating.to_csv(rating_file, sep='\t', index=False)
-    
-            # Plot n' compare them!
-            if len(rating.index) > 0:
-                rating.columns = ['time', 'player_time', 'rating']
-                # Not using the player callback time, browser time should be closer to accurate
-                rating = rating.drop(columns=['player_time'])
-                rating['time'] = rating['time'] / 1000
+            # Get the mean ratings for this video
+            mean_ratings = agg.means[name]
 
-                # Add a beginning rating that starts at the midpoint
-                # (oops, I should have had the task do this)
-                rating.loc[-1] = [0.0, 0.5]
-                rating.index = rating.index + 1 # shifting index forward
-                rating.sort_index(inplace=True) 
+            # Compare with our resampled ratings for this trial
+            rating_sampled = trial['rating_sampled']
 
-                # Add an end rating that just drags out what they started with
-                # if they didn't move the mouse for a while
-                last_rating_time = rating['time'].iloc[-1]
-                last_original_time = original['time'].iloc[-1]
-                last_time = last_rating_time
+            pearson_correlation_original = original_sampled.corrwith(rating_sampled, axis=0)
+            pearson_correlation_mean_participant = mean_ratings.corrwith(rating_sampled, axis=0)
+            tsvwriter.writerow([
+                ppt, trial_count, affect, timestamp, name,
+                float(pearson_correlation_original),
+                float(pearson_correlation_mean_participant)])
 
-                if last_original_time > last_rating_time:
-                    last_time = last_original_time
-                    new_row = {'time':last_time, 'rating':rating['rating'].iloc[-1]}
-                    rating = rating.append(new_row, ignore_index=True)
+            ax = plt.gca()
 
-                # BUT FIRST, let's make sampled dataframes that have data for every millisecond
-                original_sampled = self.sample_frame(original, last_time)
-                rating_sampled = self.sample_frame(rating, last_time)
+            original_sampled.plot(kind='line',use_index=True,y='rating',ax=ax,label='Original Actor')
+            mean_ratings.plot(kind='line',use_index=True,y='rating',ax=ax,label='Mean Ratings')
+            rating_sampled.plot(kind='line',use_index=True,y='rating',color='red',ax=ax,label=f'Participant {ppt}')
 
-                pearsonCorrelation = original_sampled.corrwith(rating_sampled, axis=0)
-                tsvwriter.writerow([ppt, trial, affect, timestamp, name, float(pearsonCorrelation)])
+            ax.get_figure().savefig(os.path.join(output_dir, f'plot_{ppt}_figure{trial_count}.png'))
+            plt.clf()
 
-                ax = plt.gca()
-
-                original_sampled.plot(kind='line',use_index=True,y='rating',ax=ax,label='Original Actor')
-                rating_sampled.plot(kind='line',use_index=True,y='rating',color='red',ax=ax,label=f'Participant {ppt}')
-
-                ax.get_figure().savefig(os.path.join(output_dir, f'plot_{ppt}_figure{trial}.png'))
-                plt.clf()
-
-    def sample_frame(self, df, time):
-        time = range(ms(time)+1)
-        nf = pd.DataFrame(columns=['rating'], index=time)
-        for index, row in df.iterrows():
-            timeindex = ms(row['time'])
-            nf.iloc[timeindex,0] = row['rating']
-        nf = nf.fillna(method='ffill')
-        return nf
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Extract usable data from lab.js sqlite database for Empathic Accuracy task')
@@ -176,9 +252,10 @@ if __name__ == '__main__':
         tsv_path = os.path.join(args.output, f'eat_summary.tsv')
         with open(tsv_path, 'w') as tsvfile:
             tsvwriter = csv.writer(tsvfile, delimiter='\t')
-            tsvwriter.writerow(['ppt', 'trial', 'affect', 'timestamp', 'video_name', 'original_rater_pearson_coefficient'])
+            tsvwriter.writerow(['ppt', 'trial', 'affect', 'timestamp', 'video_name', 'original_rater_pearson_coefficient', 'mean_participant_pearson_coefficient'])
+            agg = Aggregator(data)
             for ppt in data.keys():
-                comp = Comparer(tsvwriter, ppt, data[ppt], args.output)
+                comp = Comparer(ppt, agg, tsvwriter, args.output)
 
     else:
         logging.error("DB path does not exist")
