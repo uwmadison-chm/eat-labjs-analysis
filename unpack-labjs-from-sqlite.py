@@ -28,12 +28,16 @@ CST = pytz.timezone('US/Central')
 def sample_frame(df, time):
     time = range(ms(time)+1)
     nf = pd.DataFrame(columns=['rating'], index=time)
+    # Every once in a while we somehow get an entry that isn't sorted by time.
+    # Not sure what's causing that.
+    df = df.sort_values('time')
     for index, row in df.iterrows():
         timeindex = ms(row['time'])
         nf.iloc[timeindex,0] = row['rating']
     nf = nf.fillna(method='ffill')
     nf = nf.fillna(0.5)
     return nf
+
 
 
 def load_original(f):
@@ -62,7 +66,9 @@ def fix_ratings(rating, last_original_time):
     # (oops, I should have had the task do this)
     rating.loc[-1] = [0.0, 0.5]
     rating.index = rating.index + 1 # shifting index forward
-    rating.sort_index(inplace=True) 
+
+    # Sometimes not sorted, unclear why
+    rating = rating.sort_values('time')
 
     # Add an end rating that just drags out what they started with
     # if they didn't move the mouse for a while
@@ -163,12 +169,7 @@ class Aggregator():
                 if len(rating.index) > 0:
                     rating, last_time = fix_ratings(rating, get_original_length(filename))
                     # Resample to second bins
-                    try:
-                        rating_sampled = sample_frame(rating, last_time)
-                    except Exception as e:
-                        print(f"Spooky resampling error trapped in ppt {ppt} vid {filename}, skipping for now")
-                        pass
-                        # from IPython import embed; embed() 
+                    rating_sampled = sample_frame(rating, last_time)
                     if not filename in self.vids:
                         self.vids[filename] = []
                     if not ppt in self.ppts:
