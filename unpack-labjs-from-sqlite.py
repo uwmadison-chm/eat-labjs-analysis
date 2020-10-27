@@ -3,6 +3,7 @@ import argparse
 import json
 import logging, coloredlogs
 import itertools
+import datetime
 
 # unpacker
 import sqlite3
@@ -84,8 +85,9 @@ def fix_ratings(rating, last_original_time):
 
 
 class Unpacker():
-    def __init__(self, path):
+    def __init__(self, path, start_date):
         self.conn = sqlite3.connect(path)
+        self.start_date = start_date
 
     def execute(self, sql):
         cur = self.conn.cursor()
@@ -132,7 +134,11 @@ class Unpacker():
                         }
                     if 'video_filename' in thing:
                         to_save['video_filename'] = thing['video_filename']
-                    sessions[ppt].append(to_save)
+
+                    # Now we skip this if the timestamp is after the given start date
+                    # (but we add everything if the start date is not specified)
+                    if not self.start_date or timestamp.date() >= self.start_date:
+                        sessions[ppt].append(to_save)
 
         return sessions
         
@@ -234,6 +240,8 @@ class Comparer():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Extract usable data from lab.js sqlite database for Empathic Accuracy task')
     parser.add_argument('-v', '--verbose', action='count')
+    parser.add_argument('-s', '--start-date', type=datetime.date.fromisoformat,
+            help="Only include data after a given ISO-formatted date")
     parser.add_argument('db')
     parser.add_argument('output')
     args = parser.parse_args()
@@ -247,7 +255,7 @@ if __name__ == '__main__':
         coloredlogs.install(level='WARN')
 
     if os.path.exists(args.db):
-        u = Unpacker(args.db)
+        u = Unpacker(args.db, args.start_date)
         data = u.unpack()
 
         tsv_path = os.path.join(args.output, f'eat_summary.tsv')
@@ -255,7 +263,7 @@ if __name__ == '__main__':
             tsvwriter = csv.writer(tsvfile, delimiter='\t')
             tsvwriter.writerow(['ppt', 'trial', 'affect', 'timestamp', 'video_name', 'original_rater_pearson_coefficient', 'mean_participant_pearson_coefficient'])
             agg = Aggregator(data)
-            for ppt in data.keys():
+            for ppt in agg.ppts.keys():
                 comp = Comparer(ppt, agg, tsvwriter, args.output)
 
     else:
