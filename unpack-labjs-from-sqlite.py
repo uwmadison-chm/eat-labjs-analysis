@@ -201,9 +201,22 @@ class Aggregator():
             self.means[vid] = df_means
 
 
+class OriginalRaterPlots():
+    def __init__(self, agg, output_dir):
+        # Make some plots showing original raters plus aggregated mean participant ratings
+        for name in agg.original_videos.keys():
+            mean_ratings = agg.means[name]
+            original_sampled = agg.original_videos[name]
+
+            ax = plt.gca()
+            original_sampled.plot(kind='line',use_index=True,y='rating',ax=ax,label='Original Actor')
+            mean_ratings.plot(kind='line',use_index=True,y='rating',ax=ax,label='Mean Ratings')
+            ax.get_figure().savefig(os.path.join(output_dir, f'video_mean_plot_{name}.png'))
+            plt.clf()
+
 class Comparer():
     def __init__(self, ppt, agg, tsvwriter, output_dir):
-
+        # Write summary stats and plots for each trial this participant did
         for trial in agg.ppts[ppt]:
             trial_count = trial['trial_count']
             affect = trial['affect']
@@ -263,6 +276,7 @@ if __name__ == '__main__':
             tsvwriter = csv.writer(tsvfile, delimiter='\t')
             tsvwriter.writerow(['ppt', 'trial', 'affect', 'timestamp', 'video_name', 'original_rater_pearson_coefficient', 'mean_participant_pearson_coefficient'])
             agg = Aggregator(data)
+            OriginalRaterPlots(agg, args.output)
             for ppt in agg.ppts.keys():
                 comp = Comparer(ppt, agg, tsvwriter, args.output)
 
