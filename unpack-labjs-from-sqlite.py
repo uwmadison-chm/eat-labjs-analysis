@@ -100,11 +100,12 @@ class Unpacker():
         return cur.fetchall()
 
     def unpack(self):
-        # Map of labjs session data by ppt id
+        # Map of labjs session data by ppt id and then by session
         sessions = {}
         for row in self.select("select * from labjs where metadata like '%\"payload\":\"full\"%'"):
             rowid = row[0]
-            session = row[1]
+            # This is the internal unique id for a given "session" of the task, not the "session" passed in via URL parameter
+            labjs_session = row[1]
 
             # The data is a JSON-encoded array in the last column
             data = json.loads(row[5])
@@ -112,7 +113,7 @@ class Unpacker():
                 if thing['sender'] == 'Instructions Start':
                     if 'ppt' in thing:
                         ppt = thing['ppt']
-                        logging.info(f"PPT {ppt}: Reading row {rowid} for session {session}")
+                        logging.info(f"PPT {ppt}: Reading row {rowid} for session {labjs_session}")
 
                 if thing['sender'] == 'Video':
                     trial_count = 0
@@ -120,16 +121,22 @@ class Unpacker():
                         trial_count = thing['trial_count']
                     ppt = thing['ppt']
                     if not ppt in sessions:
-                        sessions[ppt] = []
+                        sessions[ppt] = {}
+
+                    ppt_session = str(thing['session']) or "1"
+                    if not ppt_session in sessions[ppt]:
+                        sessions[ppt][ppt_session] = []
 
                     timestamp = dateutil.parser.parse(thing['timestamp']).astimezone(CST)
-                    logging.debug(f"Got video {trial_count} with {len(thing['response'])} mouse movements for {ppt} at {timestamp}")
+
+                    logging.debug(f"Got video {trial_count} with {len(thing['response'])} mouse movements for {ppt} session {ppt_session} at {timestamp}")
 
                     to_save = {
                             'affect': thing['affect'],
                             'trial_count': trial_count,
                             'response': thing['response'],
                             'ppt': thing['ppt'],
+                            'ppt_session': ppt_session,
                             'timestamp': timestamp,
                         }
                     if 'video_filename' in thing:
@@ -138,7 +145,7 @@ class Unpacker():
                     # Now we skip this if the timestamp is after the given start date
                     # (but we add everything if the start date is not specified)
                     if not self.start_date or timestamp.date() >= self.start_date:
-                        sessions[ppt].append(to_save)
+                        sessions[ppt][ppt_session].append(to_save)
 
         return sessions
         
@@ -168,27 +175,30 @@ class Aggregator():
                 return time
 
         for ppt in data.keys():
-            for vid in data[ppt]:
-                filename = vid['video_filename']
+            for session, vids in data[ppt].items():
+                for vid in vids:
+                    filename = vid['video_filename']
 
-                rating = pd.DataFrame(vid['response'])
-                if len(rating.index) > 0:
-                    rating, last_time = fix_ratings(rating, get_original_length(filename))
-                    # Resample to second bins
-                    rating_sampled = sample_frame(rating, last_time)
-                    if not filename in self.vids:
-                        self.vids[filename] = []
-                    if not ppt in self.ppts:
-                        self.ppts[ppt] = []
-                    self.vids[filename].append(rating_sampled)
-                    self.ppts[ppt].append({
-                        'filename': filename,
-                        'rating': rating,
-                        'rating_sampled': rating_sampled,
-                        'trial_count': vid['trial_count'],
-                        'affect': vid['affect'],
-                        'timestamp': vid['timestamp'],
-                    })
+                    rating = pd.DataFrame(vid['response'])
+                    if len(rating.index) > 0:
+                        rating, last_time = fix_ratings(rating, get_original_length(filename))
+                        # Resample to second bins
+                        rating_sampled = sample_frame(rating, last_time)
+                        if not filename in self.vids:
+                            self.vids[filename] = []
+                        if not ppt in self.ppts:
+                            self.ppts[ppt] = {}
+                        if not session in self.ppts[ppt]:
+                            self.ppts[ppt][session] = []
+                        self.vids[filename].append(rating_sampled)
+                        self.ppts[ppt][session].append({
+                            'filename': filename,
+                            'rating': rating,
+                            'rating_sampled': rating_sampled,
+                            'trial_count': vid['trial_count'],
+                            'affect': vid['affect'],
+                            'timestamp': vid['timestamp'],
+                        })
 
         self.means = {}
         # OK, now we have a hash by video file and can average them together...
@@ -216,38 +226,39 @@ class OriginalRaterPlots():
 
 class Comparer():
     def __init__(self, ppt, agg, tsvwriter, output_dir):
-        # Write summary stats and plots for each trial this participant did
-        for trial in agg.ppts[ppt]:
-            trial_count = trial['trial_count']
-            affect = trial['affect']
-            timestamp = trial['timestamp']
-            name = trial['filename']
+        for session, trials in agg.ppts[ppt].items():
+            # Write summary stats and plots for each trial this participant did
+            for trial in trials:
+                trial_count = trial['trial_count']
+                affect = trial['affect']
+                timestamp = trial['timestamp']
+                name = trial['filename']
 
-            # Get original actor's ratings, previously loaded and resampled by aggregator
-            original_sampled = agg.original_videos[name]
-            short_name = agg.original_videos[name]
+                # Get original actor's ratings, previously loaded and resampled by aggregator
+                original_sampled = agg.original_videos[name]
+                short_name = agg.original_videos[name]
 
-            # Get the mean ratings for this video
-            mean_ratings = agg.means[name]
+                # Get the mean ratings for this video
+                mean_ratings = agg.means[name]
 
-            # Compare with our resampled ratings for this trial
-            rating_sampled = trial['rating_sampled']
+                # Compare with our resampled ratings for this trial
+                rating_sampled = trial['rating_sampled']
 
-            pearson_correlation_original = original_sampled.corrwith(rating_sampled, axis=0)
-            pearson_correlation_mean_participant = mean_ratings.corrwith(rating_sampled, axis=0)
-            tsvwriter.writerow([
-                ppt, trial_count, affect, timestamp, name,
-                float(pearson_correlation_original),
-                float(pearson_correlation_mean_participant)])
+                pearson_correlation_original = original_sampled.corrwith(rating_sampled, axis=0)
+                pearson_correlation_mean_participant = mean_ratings.corrwith(rating_sampled, axis=0)
+                tsvwriter.writerow([
+                    ppt, session, trial_count, affect, timestamp, name,
+                    float(pearson_correlation_original),
+                    float(pearson_correlation_mean_participant)])
 
-            ax = plt.gca()
+                ax = plt.gca()
 
-            original_sampled.plot(kind='line',use_index=True,y='rating',ax=ax,label='Original Actor')
-            mean_ratings.plot(kind='line',use_index=True,y='rating',ax=ax,label='Mean Ratings')
-            rating_sampled.plot(kind='line',use_index=True,y='rating',color='red',ax=ax,label=f'Participant {ppt}')
+                original_sampled.plot(kind='line',use_index=True,y='rating',ax=ax,label='Original Actor')
+                mean_ratings.plot(kind='line',use_index=True,y='rating',ax=ax,label='Mean Ratings')
+                rating_sampled.plot(kind='line',use_index=True,y='rating',color='red',ax=ax,label=f'Participant {ppt}')
 
-            ax.get_figure().savefig(os.path.join(output_dir, f'plot_{ppt}_figure{trial_count}.png'))
-            plt.clf()
+                ax.get_figure().savefig(os.path.join(output_dir, f'plot_{ppt}_{session}_figure{trial_count}.png'))
+                plt.clf()
 
 
 if __name__ == '__main__':
@@ -274,7 +285,7 @@ if __name__ == '__main__':
         tsv_path = os.path.join(args.output, f'eat_summary.tsv')
         with open(tsv_path, 'w') as tsvfile:
             tsvwriter = csv.writer(tsvfile, delimiter='\t')
-            tsvwriter.writerow(['ppt', 'trial', 'affect', 'timestamp', 'video_name', 'original_rater_pearson_coefficient', 'mean_participant_pearson_coefficient'])
+            tsvwriter.writerow(['ppt', 'session', 'trial', 'affect', 'timestamp', 'video_name', 'original_rater_pearson_coefficient', 'mean_participant_pearson_coefficient'])
             agg = Aggregator(data)
             OriginalRaterPlots(agg, args.output)
             for ppt in agg.ppts.keys():
