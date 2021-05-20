@@ -137,6 +137,7 @@ class Unpacker():
                             'response': thing['response'],
                             'ppt': thing['ppt'],
                             'ppt_session': ppt_session,
+                            'labjs_session': labjs_session,
                             'timestamp': timestamp,
                         }
                     if 'video_filename' in thing:
@@ -197,6 +198,7 @@ class Aggregator():
                             'rating_sampled': rating_sampled,
                             'trial_count': vid['trial_count'],
                             'affect': vid['affect'],
+                            'labjs_session': vid['labjs_session'],
                             'timestamp': vid['timestamp'],
                         })
 
@@ -227,6 +229,8 @@ class OriginalRaterPlots():
 class Comparer():
     def __init__(self, ppt, agg, tsvwriter, output_dir):
         for session, trials in agg.ppts[ppt].items():
+            if len(trials) != 6:
+                logging.warning(f"Got {len(trials)} for {ppt} in {session}")
             # Write summary stats and plots for each trial this participant did
             for trial in trials:
                 trial_count = trial['trial_count']
